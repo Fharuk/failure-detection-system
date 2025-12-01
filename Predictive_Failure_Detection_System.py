@@ -9,7 +9,7 @@ import os
 # -------------------------------------------------------------------------------------------------
 st.set_page_config(page_title="System Failure Prediction", layout="centered")
 
-# STRICT DATA CONTRACT (10 Features Only)
+# STRICT DATA CONTRACT (10 Features)
 MODEL_SCHEMA = [
     "footfall", "tempMode", "AQ", "USS", "CS", 
     "VOC", "RP", "IP", "Temperature", "footfall_log"
@@ -18,7 +18,7 @@ MODEL_SCHEMA = [
 MODEL_PATH = "pipeline_with_footfall_log.joblib"
 
 # -------------------------------------------------------------------------------------------------
-# LOADER
+# MODEL LOADER (WITH SURGERY)
 # -------------------------------------------------------------------------------------------------
 @st.cache_resource
 def load_system_model():
@@ -26,8 +26,19 @@ def load_system_model():
         st.error(f"CRITICAL: Artifact '{MODEL_PATH}' not found.")
         return None
     try:
-        model = joblib.load(MODEL_PATH)
-        return model
+        # 1. Load the full artifact
+        pipeline = joblib.load(MODEL_PATH)
+        
+        # 2. PERFORM SURGERY: Extract the Inner Classifier
+        # The outer pipeline is expanding data to 28 cols, but the inner one wants 10.
+        # We bypass the outer 'preprocessor' and grab the 'classifier'.
+        if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
+            inner_model = pipeline.named_steps['classifier']
+            return inner_model
+            
+        # Fallback: If surgery isn't possible, use the whole thing (unlikely to work)
+        return pipeline
+        
     except Exception as e:
         st.error(f"Model Integrity Error: {e}")
         return None
@@ -36,10 +47,6 @@ def load_system_model():
 # DATA GUARD
 # -------------------------------------------------------------------------------------------------
 def enforce_model_schema(df_raw):
-    """
-    1. Calculate Log.
-    2. Filter to EXACTLY 10 columns.
-    """
     df_clean = df_raw.copy()
 
     # 1. Feature Engineering
@@ -50,7 +57,6 @@ def enforce_model_schema(df_raw):
 
     # 2. Strict Filtering
     try:
-        # THIS IS THE CRITICAL LINE THAT WAS MISSING/FAILING
         df_final = df_clean[MODEL_SCHEMA]
         return df_final
     except KeyError as e:
@@ -63,10 +69,16 @@ def enforce_model_schema(df_raw):
 # -------------------------------------------------------------------------------------------------
 def main():
     st.title("System Failure Prediction")
-    st.markdown("### Debug Mode Active")
+    st.markdown("### Operational Dashboard")
+    
+    # 1. Clear Cache Button (CRITICAL FOR THIS FIX)
+    if st.sidebar.button("🧹 Force Reload Model"):
+        st.cache_resource.clear()
+        st.rerun()
 
-    pipeline = load_system_model()
-    if pipeline is None:
+    # 2. Load Model
+    model = load_system_model()
+    if model is None:
         st.stop()
 
     tabs = st.tabs(["Manual Diagnostics", "Batch Processing"])
@@ -87,7 +99,7 @@ def main():
                 ip = st.slider("IP", 0, 10, 5)
                 temp = st.number_input("Temperature", -50, 150, 25)
             
-            submit = st.form_submit_button("Run Diagnostics")
+            submit = st.form_submit_button("Run Diagnostics", type="primary")
 
         if submit:
             raw_data = {
@@ -98,15 +110,19 @@ def main():
             df_ready = enforce_model_schema(pd.DataFrame([raw_data]))
 
             if df_ready is not None:
-                # DEBUG DISPLAY
-                st.warning(f"DEBUG: Sending Data Shape {df_ready.shape} to Model")
-                st.write("Columns sent:", df_ready.columns.tolist())
-                
                 try:
-                    prediction = pipeline.predict(df_ready)[0]
-                    st.success(f"Prediction: {prediction}")
+                    prediction = model.predict(df_ready)[0]
+                    
+                    st.divider()
+                    if prediction == 1:
+                        st.error("⚠️ FAILURE PREDICTED")
+                        st.markdown("**Action:** Immediate maintenance required.")
+                    else:
+                        st.success("✅ SYSTEM STABLE")
+                        st.markdown("**Action:** Continue monitoring.")
                 except Exception as e:
-                    st.error(f"Inference Engine Failed: {e}")
+                    st.error(f"Inference Failed: {e}")
+                    st.warning("⚠️ Try clicking 'Force Reload Model' in the sidebar.")
 
     # --- BATCH TAB ---
     with tabs[1]:
@@ -116,15 +132,19 @@ def main():
             df_ready = enforce_model_schema(df_upload)
             
             if df_ready is not None:
-                # DEBUG DISPLAY
-                st.warning(f"DEBUG: Sending Data Shape {df_ready.shape} to Model")
-                
                 try:
-                    predictions = pipeline.predict(df_ready)
+                    predictions = model.predict(df_ready)
+                    
+                    # Merge and Show
+                    df_results = df_upload.copy()
+                    df_results["Failure_Prediction"] = predictions
                     st.success("Batch Prediction Complete")
-                    st.dataframe(pd.DataFrame(predictions, columns=["Failure_Pred"]).head())
+                    st.dataframe(df_results.head())
+                    
+                    csv = df_results.to_csv(index=False).encode("utf-8")
+                    st.download_button("Download Report", csv, "report.csv", "text/csv")
                 except Exception as e:
-                    st.error(f"Batch Inference Failed: {e}")
+                    st.error(f"Batch Failed: {e}")
 
 if __name__ == "__main__":
     main()
