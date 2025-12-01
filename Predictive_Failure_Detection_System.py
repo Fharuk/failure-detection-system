@@ -23,7 +23,7 @@ FINAL_FEATURES = [
 @st.cache_resource
 def load_pipeline():
     if not os.path.exists(MODEL_FILE):
-        st.error(f"🚨 Critical Error: Model file '{MODEL_FILE}' not found.")
+        st.error(f"Critical Error: Model file '{MODEL_FILE}' not found.")
         return None
     try:
         model = joblib.load(MODEL_FILE)
@@ -46,9 +46,11 @@ def preprocess_input(df):
     
     # 1. Feature Engineering (Calculate the log)
     if 'footfall' in df_processed.columns:
+        # Use log1p to handle zeros safely
         df_processed['footfall_log'] = np.log1p(df_processed['footfall'])
     else:
-        st.error("Input must contain 'footfall' column.")
+        # If the input doesn't have footfall, we can't proceed
+        st.error("Input data missing required column: 'footfall'")
         return None
 
     # 2. Strict Column Filtering (The "Bouncer")
@@ -59,19 +61,19 @@ def preprocess_input(df):
     except KeyError as e:
         # This catches if one of the REQUIRED columns is missing
         missing = list(set(FINAL_FEATURES) - set(df_processed.columns))
-        st.error(f"Missing required columns: {missing}")
+        st.error(f"Missing required columns for prediction: {missing}")
         return None
 
 # -------------------------------------------------------------------------------------------------
 # UI & INPUTS
 # -------------------------------------------------------------------------------------------------
-st.title("⚙️ System Failure Predictor")
+st.title("System Failure Predictor")
 st.markdown("Early warning system for predictive maintenance.")
 
 if pipeline is None:
     st.stop()
 
-tab1, tab2 = st.tabs(["🎛️ Manual Input", "📂 Batch Upload"])
+tab1, tab2 = st.tabs(["Manual Input", "Batch Upload"])
 
 with tab1:
     st.subheader("Sensor Readings")
@@ -104,10 +106,10 @@ with tab1:
                 
                 st.markdown("---")
                 if prediction == 1:
-                    st.error("### ⚠️ PREDICTION: FAILURE IMMINENT")
+                    st.error("PREDICTION: FAILURE IMMINENT")
                     st.warning("Action required immediately.")
                 else:
-                    st.success("### ✅ PREDICTION: SYSTEM STABLE")
+                    st.success("PREDICTION: SYSTEM STABLE")
             except Exception as e:
                 st.error(f"Prediction failed: {e}")
 
