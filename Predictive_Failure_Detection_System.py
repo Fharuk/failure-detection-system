@@ -15,9 +15,6 @@ MODEL_FILE = "pipeline_with_footfall_log.joblib"
 # -------------------------------------------------------------------------------------------------
 @st.cache_resource
 def load_pipeline():
-    """
-    Load the pipeline once and keep it in memory.
-    """
     if not os.path.exists(MODEL_FILE):
         st.error(f"🚨 Critical Error: Model file '{MODEL_FILE}' not found.")
         return None
@@ -30,8 +27,28 @@ def load_pipeline():
 
 pipeline = load_pipeline()
 
-# Features expected by the pipeline
-pipeline_features = ['footfall', 'tempMode', 'AQ', 'USS', 'CS', 'VOC', 'RP', 'IP', 'Temperature']
+# -------------------------------------------------------------------------------------------------
+# FEATURE ENGINEERING LOGIC (The Fix)
+# -------------------------------------------------------------------------------------------------
+def preprocess_input(df):
+    """
+    Transforms raw features into the features expected by the model.
+    specifically: calculates 'footfall_log'.
+    """
+    df_processed = df.copy()
+    
+    # Check if 'footfall' exists to avoid errors
+    if 'footfall' in df_processed.columns:
+        # We use log1p (log(x+1)) to handle cases where footfall is 0 safely
+        df_processed['footfall_log'] = np.log1p(df_processed['footfall'])
+    else:
+        # If user uploads CSV with 'footfall_log' already, we are fine.
+        # If neither exists, we have a problem.
+        if 'footfall_log' not in df_processed.columns:
+            st.error("Input must contain 'footfall' column.")
+            return None
+
+    return df_processed
 
 # -------------------------------------------------------------------------------------------------
 # UI & INPUTS
@@ -42,7 +59,7 @@ st.markdown("Early warning system for predictive maintenance.")
 if pipeline is None:
     st.stop()
 
-# Tabs for different input methods
+# Tabs
 tab1, tab2 = st.tabs(["🎛️ Manual Input", "📂 Batch Upload"])
 
 with tab1:
@@ -51,9 +68,9 @@ with tab1:
     
     single_input = {}
     
-    # We split inputs into two columns for a cleaner look
     with col1:
-        single_input['footfall'] = st.number_input("Footfall (0-1000)", 0, 10000, 100)
+        # We capture the RAW footfall here
+        single_input['footfall'] = st.number_input("Footfall (0-10000)", 0, 10000, 100)
         single_input['tempMode'] = st.slider("Temp Mode (0-10)", 0, 10, 3)
         single_input['AQ'] = st.slider("Air Quality (AQ)", 0, 1000, 100)
         single_input['USS'] = st.slider("Ultrasonic Sensor (USS)", 0, 1000, 100)
@@ -66,20 +83,26 @@ with tab1:
         single_input['Temperature'] = st.number_input("Temperature", -50, 150, 25)
 
     if st.button("Analyze Sensors", type="primary"):
+        # 1. Create DataFrame
         input_df = pd.DataFrame([single_input])
-        # Ensure correct column order
-        input_df = input_df[pipeline_features]
         
-        try:
-            prediction = pipeline.predict(input_df)[0]
-            st.markdown("---")
-            if prediction == 1:
-                st.error("### ⚠️ PREDICTION: FAILURE IMMINENT")
-                st.warning("Action required immediately.")
-            else:
-                st.success("### ✅ PREDICTION: SYSTEM STABLE")
-        except Exception as e:
-            st.error(f"Prediction failed: {e}")
+        # 2. Apply Engineering (Create footfall_log)
+        processed_df = preprocess_input(input_df)
+        
+        if processed_df is not None:
+            try:
+                # 3. Predict
+                prediction = pipeline.predict(processed_df)[0]
+                
+                st.markdown("---")
+                if prediction == 1:
+                    st.error("### ⚠️ PREDICTION: FAILURE IMMINENT")
+                    st.warning("Action required immediately.")
+                else:
+                    st.success("### ✅ PREDICTION: SYSTEM STABLE")
+            except Exception as e:
+                st.error(f"Prediction failed: {e}")
+                st.info("Technical Detail: Ensure the model pipeline expects these exact columns.")
 
 with tab2:
     st.subheader("Batch Processing")
@@ -88,13 +111,11 @@ with tab2:
     if uploaded_file:
         try:
             df = pd.read_csv(uploaded_file)
-            missing_cols = set(pipeline_features) - set(df.columns)
             
-            if missing_cols:
-                st.error(f"Missing required columns: {missing_cols}")
-            else:
-                # Keep only relevant columns
-                process_df = df[pipeline_features].copy()
+            # Preprocess the batch
+            process_df = preprocess_input(df)
+            
+            if process_df is not None:
                 predictions = pipeline.predict(process_df)
                 
                 df['Failure_Prediction'] = predictions
