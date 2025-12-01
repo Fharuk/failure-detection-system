@@ -4,162 +4,187 @@ import numpy as np
 import joblib
 import os
 
-# Application Configuration
+# -------------------------------------------------------------------------------------------------
+# ENTERPRISE CONFIGURATION
+# -------------------------------------------------------------------------------------------------
 st.set_page_config(
     page_title="System Failure Prediction",
-    layout="centered"
+    layout="centered",
+    initial_sidebar_state="expanded"
 )
 
-# Constants
-MODEL_FILENAME = "pipeline_with_footfall_log.joblib"
-REQUIRED_MODEL_FEATURES = [
-    "footfall", "tempMode", "AQ", "USS", "CS", 
-    "VOC", "RP", "IP", "Temperature", "footfall_log"
+# STRICT DATA CONTRACT
+# The model will ONLY accept these columns in this EXACT order.
+MODEL_SCHEMA = [
+    "footfall",
+    "tempMode",
+    "AQ",
+    "USS",
+    "CS",
+    "VOC",
+    "RP",
+    "IP",
+    "Temperature",
+    "footfall_log"
 ]
 
+MODEL_PATH = "pipeline_with_footfall_log.joblib"
+
+# -------------------------------------------------------------------------------------------------
+# RESOURCE MANAGEMENT
+# -------------------------------------------------------------------------------------------------
 @st.cache_resource
-def load_prediction_pipeline():
+def load_system_model():
     """
-    Load the serialized machine learning pipeline from disk.
-    Uses caching to prevent reloading on every interaction.
+    Load the predictive pipeline with robust error handling.
     """
-    if not os.path.exists(MODEL_FILENAME):
-        st.error(f"Critical Error: Model artifact '{MODEL_FILENAME}' not found.")
+    if not os.path.exists(MODEL_PATH):
+        st.error(f"CRITICAL: Artifact '{MODEL_PATH}' not found on server.")
         return None
     try:
-        pipeline = joblib.load(MODEL_FILENAME)
-        return pipeline
+        model = joblib.load(MODEL_PATH)
+        return model
     except Exception as e:
-        st.error(f"Failed to load model architecture: {str(e)}")
+        st.error(f"Model Integrity Error: {str(e)}")
         return None
 
-def transform_input_data(df_input):
+# -------------------------------------------------------------------------------------------------
+# DATA TRANSFORMATION PIPELINE
+# -------------------------------------------------------------------------------------------------
+def enforce_model_schema(df_raw):
     """
-    Apply feature engineering and enforce strict schema compliance.
-    
-    1. Validates presence of raw 'footfall' column.
-    2. Calculates 'footfall_log' using log1p transformation.
-    3. Filters dataset to strictly match the 10 features expected by the model.
+    Acts as a strict gatekeeper. 
+    1. Validates prerequisites.
+    2. Performs feature engineering (Log Transform).
+    3. STRIPS extraneous columns (The 'Bouncer' Logic).
     """
-    df_transformed = df_input.copy()
+    df_clean = df_raw.copy()
 
-    # Validate raw dependency
-    if "footfall" not in df_transformed.columns:
-        st.error("Validation Error: Input data is missing the 'footfall' column.")
+    # 1. Validation
+    if "footfall" not in df_clean.columns:
+        st.error("Schema Violation: Input missing 'footfall' column.")
         return None
 
-    # Feature Engineering
-    # Using log1p to handle potential zero values in footfall safely
-    df_transformed["footfall_log"] = np.log1p(df_transformed["footfall"])
+    # 2. Engineering
+    # Apply log transformation (log1p handles zeros safely)
+    df_clean["footfall_log"] = np.log1p(df_clean["footfall"])
 
-    # Schema Enforcement
-    # Filter only the columns the model was trained on. 
-    # This prevents dimension mismatch errors if the input has extra columns.
+    # 3. Filtering (The Critical Fix)
+    # We attempt to select ONLY the 10 required columns.
+    # If any are missing, we catch the error immediately.
     try:
-        df_final = df_transformed[REQUIRED_MODEL_FEATURES]
+        df_final = df_clean[MODEL_SCHEMA]
         return df_final
     except KeyError as e:
-        missing_features = list(set(REQUIRED_MODEL_FEATURES) - set(df_transformed.columns))
-        st.error(f"Schema Error: Missing required features: {missing_features}")
+        missing = list(set(MODEL_SCHEMA) - set(df_clean.columns))
+        st.error(f"Schema Violation: Input is missing required features: {missing}")
         return None
 
+# -------------------------------------------------------------------------------------------------
+# USER INTERFACE & LOGIC
+# -------------------------------------------------------------------------------------------------
 def main():
     st.title("System Failure Prediction")
-    st.markdown("Predictive maintenance interface for sensor data analysis.")
-
+    st.markdown("### Predictive Maintenance Interface")
+    
     # Load Model
-    pipeline = load_prediction_pipeline()
+    pipeline = load_system_model()
     if pipeline is None:
         st.stop()
 
-    # Input Method Selection
-    tab_manual, tab_batch = st.tabs(["Manual Entry", "Batch Upload"])
+    # Input Strategy
+    tabs = st.tabs(["Manual Diagnostics", "Batch Processing"])
 
-    # Manual Entry Tab
-    with tab_manual:
-        st.subheader("Sensor Parameters")
+    # --- TAB 1: MANUAL ENTRY ---
+    with tabs[0]:
+        st.info("Configure sensor parameters below.")
         
-        with st.form("manual_input_form"):
-            col1, col2 = st.columns(2)
+        with st.form("diagnostic_form"):
+            c1, c2 = st.columns(2)
             
-            with col1:
-                footfall = st.number_input("Footfall", min_value=0, max_value=10000, value=100)
+            with c1:
+                footfall = st.number_input("Footfall", 0, 10000, 100)
                 temp_mode = st.slider("Temp Mode", 0, 10, 3)
                 aq = st.slider("Air Quality (AQ)", 0, 1000, 100)
                 uss = st.slider("Ultrasonic Sensor (USS)", 0, 1000, 100)
                 cs = st.slider("Current Sensor (CS)", 0, 10, 5)
-            
-            with col2:
+
+            with c2:
                 voc = st.slider("VOC Level", 0, 1000, 100)
                 rp = st.slider("RP", 0, 1000, 100)
                 ip = st.slider("IP", 0, 10, 5)
-                temperature = st.number_input("Temperature (C)", min_value=-50, max_value=150, value=25)
+                temp = st.number_input("Temperature (°C)", -50, 150, 25)
 
-            submit_btn = st.form_submit_button("Run Prediction", type="primary")
+            # Hidden logic: We don't ask user for footfall_log, we calculate it.
+            submit = st.form_submit_button("Run Diagnostics", type="primary")
 
-        if submit_btn:
-            # Construct DataFrame from manual inputs
-            # Note: We do not add footfall_log here; the transformer handles it.
-            input_data = {
+        if submit:
+            # Construct Dictionary
+            raw_data = {
                 "footfall": footfall, "tempMode": temp_mode, "AQ": aq,
                 "USS": uss, "CS": cs, "VOC": voc,
-                "RP": rp, "IP": ip, "Temperature": temperature
+                "RP": rp, "IP": ip, "Temperature": temp
             }
             
-            df_manual = pd.DataFrame([input_data])
-            df_processed = transform_input_data(df_manual)
+            # Process
+            df_raw = pd.DataFrame([raw_data])
+            df_ready = enforce_model_schema(df_raw)
 
-            if df_processed is not None:
+            if df_ready is not None:
                 try:
-                    prediction = pipeline.predict(df_processed)[0]
+                    # Developer Mode: Show exactly what is being sent to the model
+                    with st.expander("Developer Debug Data"):
+                        st.write("Input Shape:", df_ready.shape)
+                        st.write("Active Columns:", df_ready.columns.tolist())
+                    
+                    # Inference
+                    prediction = pipeline.predict(df_ready)[0]
                     
                     st.divider()
-                    st.subheader("Analysis Result")
                     if prediction == 1:
-                        st.error("Status: FAILURE IMMINENT")
-                        st.markdown("**Action Required:** Schedule immediate maintenance.")
+                        st.error("⚠️ ALERT: FAILURE PREDICTED")
+                        st.markdown("**Recommendation:** Initiate emergency maintenance protocols.")
                     else:
-                        st.success("Status: SYSTEM STABLE")
-                        st.markdown("**Action Required:** None. System operating within normal parameters.")
+                        st.success("✅ STATUS: SYSTEM STABLE")
+                        st.markdown("**Recommendation:** Continue standard monitoring.")
+                        
                 except Exception as e:
-                    st.error(f"Prediction execution failed: {str(e)}")
+                    st.error(f"Inference Engine Failed: {str(e)}")
 
-    # Batch Upload Tab
-    with tab_batch:
-        st.subheader("Bulk File Processing")
-        uploaded_file = st.file_uploader("Upload sensor log (CSV)", type=["csv"])
+    # --- TAB 2: BATCH UPLOAD ---
+    with tabs[1]:
+        st.info("Upload sensor logs for bulk analysis (CSV).")
+        uploaded_file = st.file_uploader("Select CSV File", type=["csv"])
 
         if uploaded_file:
             try:
-                df_raw = pd.read_csv(uploaded_file)
-                df_processed = transform_input_data(df_raw)
-
-                if df_processed is not None:
-                    # Run Inference
-                    predictions = pipeline.predict(df_processed)
+                df_upload = pd.read_csv(uploaded_file)
+                
+                # Process
+                df_ready = enforce_model_schema(df_upload)
+                
+                if df_ready is not None:
+                    # Inference
+                    predictions = pipeline.predict(df_ready)
                     
-                    # Merge results with original data for context
-                    df_results = df_raw.copy()
+                    # Result Merging
+                    df_results = df_upload.copy()
                     df_results["Failure_Prediction"] = predictions
                     
-                    # Move prediction column to the front
-                    cols = ["Failure_Prediction"] + [c for c in df_results.columns if c != "Failure_Prediction"]
-                    df_results = df_results[cols]
-                    
-                    st.success("Batch processing complete.")
+                    # Visual Feedback
+                    st.success("Processing Complete")
                     st.dataframe(df_results.head())
                     
                     # Export
-                    csv_data = df_results.to_csv(index=False).encode("utf-8")
+                    csv = df_results.to_csv(index=False).encode("utf-8")
                     st.download_button(
-                        label="Download Analysis Report",
-                        data=csv_data,
-                        file_name="failure_predictions.csv",
-                        mime="text/csv"
+                        "Download Analysis Report",
+                        csv,
+                        "failure_report.csv",
+                        "text/csv"
                     )
-
             except Exception as e:
-                st.error(f"File processing error: {str(e)}")
+                st.error(f"Batch Processing Error: {str(e)}")
 
 if __name__ == "__main__":
     main()
