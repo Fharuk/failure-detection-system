@@ -10,7 +10,7 @@ import os
 st.set_page_config(page_title="Predictive Failure Detection", layout="centered")
 MODEL_FILE = "pipeline_with_footfall_log.joblib"
 
-# The EXACT 10 columns the model was trained on
+# The EXACT 10 columns the model requires
 # (9 Raw Features + 1 Engineered Feature)
 FINAL_FEATURES = [
     'footfall', 'tempMode', 'AQ', 'USS', 'CS', 'VOC', 'RP', 'IP', 'Temperature', 
@@ -44,7 +44,7 @@ def preprocess_input(df):
     """
     df_processed = df.copy()
     
-    # 1. Feature Engineering
+    # 1. Feature Engineering (Calculate the log)
     if 'footfall' in df_processed.columns:
         df_processed['footfall_log'] = np.log1p(df_processed['footfall'])
     else:
@@ -52,12 +52,12 @@ def preprocess_input(df):
         return None
 
     # 2. Strict Column Filtering (The "Bouncer")
+    # This removes the extra 18 columns causing the crash
     try:
-        # Keep ONLY the columns the model expects
         df_final = df_processed[FINAL_FEATURES]
         return df_final
     except KeyError as e:
-        # If any of the 9 raw features are missing, this error triggers
+        # This catches if one of the REQUIRED columns is missing
         missing = list(set(FINAL_FEATURES) - set(df_processed.columns))
         st.error(f"Missing required columns: {missing}")
         return None
@@ -95,7 +95,7 @@ with tab1:
     if st.button("Analyze Sensors", type="primary"):
         input_df = pd.DataFrame([single_input])
         
-        # Preprocess (Calc Log + Filter Columns)
+        # Preprocess
         processed_df = preprocess_input(input_df)
         
         if processed_df is not None:
@@ -119,16 +119,16 @@ with tab2:
         try:
             df = pd.read_csv(uploaded_file)
             
-            # Preprocess (Calc Log + Filter Columns)
+            # Preprocess
             process_df = preprocess_input(df)
             
             if process_df is not None:
                 predictions = pipeline.predict(process_df)
                 
-                # Attach predictions back to the ORIGINAL dataframe (so user sees context)
+                # Attach predictions to original for context
                 df['Failure_Prediction'] = predictions
                 
-                # Move prediction to front for visibility
+                # Reorder columns to show prediction first
                 cols = ['Failure_Prediction'] + [c for c in df.columns if c != 'Failure_Prediction']
                 df = df[cols]
                 
